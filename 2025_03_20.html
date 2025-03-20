@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Improving Object Detection through Reinforcement Learning with VLM-R1</title>
+    <link rel="stylesheet" href="css/blog-styles.css">
+</head>
+<body>
+    <nav>
+        <a href="index.html">Back to Blog Index</a>
+    </nav>
+    
+    <header>
+        <h1>Improving Object Detection through Reinforcement Learning with VLM-R1</h1>
+        <p><em>Published on March 20, 2025</em></p>
+    </header>
+
+    <main>
+        <h2>TL;DR</h2>
+        <p>This work demonstrates that reinforcement learning (RL) significantly enhances object detection performance compared to supervised fine-tuning (SFT) in vision-language models. Using the VLM-R1 framework (built on Qwen2.5-VL-3B) trained on the Description Detection Dataset (D³), RL achieved:</p>
+        <ul>
+            <li><strong>20.1% mAP</strong> on COCO (vs. 17.8% for SFT; 14.2% for 7B model)</li>
+            <li>New <strong>SOTA 31.01 nms-AP</strong> on OVDEval (vs. 26.50 for SFT; 29.08 for 7B model), excelling in complex tasks like position (+9.2%) and relationship detection (+8.4%).</li>
+            <li>Emergent <strong>"OD aha moment" reasoning</strong>: RL models spontaneously learned to filter irrelevant objects via an internal verification step before detection.</li>
+        </ul>
+
+        <p>Key innovations include reward engineering to suppress redundant bounding boxes and length-controlled outputs, addressing critical limitations of traditional AP metrics. The results validate that RL learns generalizable detection principles rather than memorizing training data, advancing open-vocabulary object detection in real-world scenarios.</p>
+
+        <div class="image-container">
+            <img src="images/coco_overall.v2.png" alt="COCO results">
+            <p><em>Results on filtered COCO val2017 set</em></p>
+        </div>
+
+        <div class="image-container">
+            <img src="images/ovdeval_overall.v2.png" alt="OVDEval results">
+            <p><em>Results on OVDEval dataset</em></p>
+        </div>
+
+        <h2>Introduction</h2>
+        <p>Object detection remains a fundamental challenge in computer vision, particularly when dealing with flexible language descriptions and complex scenarios. In our recent work, we explored using reinforcement learning (RL) to enhance vision-language models' object detection capabilities using the VLM-R1 framework. Our findings align with recent research showing that RL approaches tend to learn more generalizable knowledge compared to supervised fine-tuning (SFT) methods (Chu et al., 2024).</p>
+
+        <p>One of the most surprising discoveries in our research was the emergence of an unexpected reasoning pattern (we called it "<strong>OD aha moment</strong>") in our RL-trained model. When presented with a detection task containing multiple potential objects (including hard negative labels), the model spontaneously developed a two-step approach: first explicitly filtering and identifying which objects are actually present in the image through a "thinking" step, then proceeding with precise bounding box detection. This emergent behavior was particularly interesting as it wasn't explicitly trained or prompted - the model independently learned to tackle complex scenarios by first reasoning about relevant objects before making detections. For example, when given a tennis court image with a mix of relevant objects and irrelevant items (like "white swan" or "incomplete apple"), the model first states its focus on tennis-related elements before outputting any bounding boxes, resulting in more accurate and efficient detection.</p>
+
+        <h3>Object Detection "Aha Moment" Example</h3>
+        <div class="image-container">
+            <img src="images/tennis_example.png" alt="Tennis court image example">
+        </div>
+
+        <pre><code>Given task: Please carefully check the image and detect the following objects: 
+- white swan in the water
+- person playing tennis with a racket
+- person wearing a hat on a tennis court
+- tennis racket
+- incomplete apple
+- non-human mask
+- volleyball on the beach
+- person doing yoga
+
+&lt;think&gt;
+The task requires object detection. From analyzing the image, I can see this is a tennis-related scene. 
+Only tennis-related objects are present - specifically a player with a racket wearing a hat. 
+Other objects like swans, apples, masks, volleyballs and yoga poses are not in this image.
+&lt;/think&gt;
+
+&lt;answer&gt;
+```json
+[
+    {"bbox_2d": [160, 17, 534, 507], "label": "person playing tennis with a racket"},
+    {"bbox_2d": [160, 17, 534, 507], "label": "person wearing a hat on a tennis court"},
+    {"bbox_2d": [146, 74, 228, 133], "label": "tennis racket"}
+]
+```
+&lt;/answer&gt;</code></pre>
+
+        <h2>Methodology</h2>
+        <p>We first try training on the most popular OD dataset - COCO, but did not see any improvement for both SFT and RL model over the base model. We hypothesize that the base model - Qwen2.5-VL-3B, is well-trained on COCO and cannot learn any new knowledge out of it. We end up conducting our experiments using the Description Detection Dataset (D³), which provides several unique advantages for training object detection models:</p>
+        
+        <ul>
+            <li>Complete annotation coverage</li>
+            <li>Unrestricted language descriptions</li>
+            <li>Instance-level annotations</li>
+            <li>Support for absence expressions</li>
+        </ul>
+
+        <p>Our training process utilized the VLM-R1 framework, which builds upon the Qwen2.5-VL-3B model as the base architecture. Similar to the approach described in "SFT Memorizes, RL Generalizes," we explored both SFT and RL training paradigms to compare their effectiveness in learning generalizable detection principles rather than merely memorizing training data.</p>
+
+        <h2>Evaluation Benchmark</h2>
+        <h3>OVDEval</h3>
+        <p>To thoroughly evaluate our model's capabilities, we utilized OVDEval, a comprehensive benchmark designed specifically for testing open-vocabulary detection (OVD) models. OVDEval addresses several limitations in existing evaluation methods by:</p>
+        
+        <ul>
+            <li><strong>Systematic Generalization Testing</strong>: The benchmark consists of 9 sub-datasets covering 6 key linguistic aspects:
+                <ul>
+                    <li>Object detection</li>
+                    <li>Proper noun recognition (celebrities, logos, landmarks)</li>
+                    <li>Attribute detection</li>
+                    <li>Position understanding</li>
+                    <li>Relationship comprehension</li>
+                    <li>Negation handling</li>
+                </ul>
+            </li>
+            <li><strong>Hard Negative Evaluation</strong>: OVDEval incorporates carefully selected hard negative labels, making it particularly effective at assessing real-world model performance. This is crucial for understanding how models handle challenging cases and ambiguous scenarios.</li>
+            <li><strong>Quality Assurance</strong>: All data is manually annotated by human experts to ensure high-quality ground truth, sourced from diverse datasets including HICO, VG, and Laion-400m.</li>
+            <li><strong>Improved Metrics</strong>: The benchmark introduces a new Non-Maximum Suppression Average Precision (NMS-AP) metric to address the "Inflated AP Problem" common in traditional evaluation methods. This provides a more accurate assessment of model performance by preventing artificially high scores from redundant predictions.</li>
+        </ul>
+
+        <p>This comprehensive evaluation framework allows us to assess not just basic object detection capabilities, but also the model's ability to handle complex linguistic descriptions and real-world scenarios.</p>
+
+        <h3>COCO filtered</h3>
+        <p>The COCO dataset is created from the COCO dataset's instances_val2017.json file. Since VLMs generally struggle at recall in OD tasks (see <a href="https://arxiv.org/pdf/2411.18363">ChatRex</a>), we filter out categories with more than 10 annotation boxes, ensuring that only categories with fewer boxes are included.</p>
+
+        <h2>Results and Analysis</h2>
+        <h3>COCO Dataset Performance</h3>
+        <p>Our results on the filtered COCO val2017 set showed significant improvements across key metrics:</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>COCO_filtered (mAP)</th>
+                    <th>Greedy Precision (IoU=0.5)</th>
+                    <th>Greedy Recall (IoU=0.5)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Base</td>
+                    <td>13.8</td>
+                    <td>50.93</td>
+                    <td>32.97</td>
+                </tr>
+                <tr>
+                    <td>Base 7B</td>
+                    <td>14.2</td>
+                    <td>49.79</td>
+                    <td>32.88</td>
+                </tr>
+                <tr>
+                    <td>SFT Model</td>
+                    <td>17.8</td>
+                    <td>53.15</td>
+                    <td>39.4</td>
+                </tr>
+                <tr>
+                    <td>RL Model</td>
+                    <td><strong>20.1</strong></td>
+                    <td><strong>57.57</strong></td>
+                    <td><strong>43.73</strong></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>The RL-trained model demonstrated substantial improvements over the SFT model, with a 2.3 percentage point increase in mAP (20.1% vs 17.8%), 4.42 points higher in Greedy Precision (57.57% vs 53.15%), and 4.33 points better in Greedy Recall (43.73% vs 39.4%). These consistent improvements across all metrics demonstrate RL's superior generalization capability.</p>
+
+        <h3>OVDEval Benchmark Results</h3>
+        <p>On the comprehensive OVDEval benchmark, the RL model showed significant advantages over SFT in several key areas:</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th><strong>nms-ap (avg.)</strong></th>
+                    <th>Celebrity</th>
+                    <th>Logo</th>
+                    <th>Landmark</th>
+                    <th>Color</th>
+                    <th>Material</th>
+                    <th>Position</th>
+                    <th>Relationship</th>
+                    <th>Negation</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Base</td>
+                    <td>25.46</td>
+                    <td>13.2</td>
+                    <td>26.5</td>
+                    <td>21.3</td>
+                    <td>2.9</td>
+                    <td>11.6</td>
+                    <td><strong>47.9</strong></td>
+                    <td>13.1</td>
+                    <td><strong>38.7</strong></td>
+                </tr>
+                <tr>
+                    <td>Base 7B</td>
+                    <td>29.08</td>
+                    <td>48.4</td>
+                    <td>35.8</td>
+                    <td>44.6</td>
+                    <td>3</td>
+                    <td>10.5</td>
+                    <td>40.5</td>
+                    <td>16.2</td>
+                    <td>39</td>
+                </tr>
+                <tr>
+                    <td>SFT</td>
+                    <td>26.50</td>
+                    <td>50.4</td>
+                    <td><strong>34.9</strong></td>
+                    <td><strong>50.7</strong></td>
+                    <td>4.3</td>
+                    <td>7.6</td>
+                    <td>33.7</td>
+                    <td>13.1</td>
+                    <td>34.4</td>
+                </tr>
+                <tr>
+                    <td>RL</td>
+                    <td><strong>31.01</strong></td>
+                    <td><strong>55.0</strong></td>
+                    <td>34.6</td>
+                    <td>47.9</td>
+                    <td><strong>4.5</strong></td>
+                    <td><strong>9.7</strong></td>
+                    <td>42.9</td>
+                    <td><strong>21.5</strong></td>
+                    <td>37.7</td>
+                </tr>
+                <tr>
+                    <td>RL - SFT</td>
+                    <td>+4.51</td>
+                    <td>+4.6</td>
+                    <td>-0.3</td>
+                    <td>-2.8</td>
+                    <td>+0.2</td>
+                    <td>+2.1</td>
+                    <td>+9.2</td>
+                    <td>+8.4</td>
+                    <td>+3.3</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>"SFT Memorizes, RL Generalizes"</h2>
+        <p>Our findings strongly support the conclusions drawn by <a href="https://arxiv.org/pdf/2501.17161">Chu et al</a>. regarding the different learning behaviors of SFT and RL approaches:</p>
+
+        <ol>
+            <li><strong>Generalization Capability</strong>: The RL model demonstrated superior generalization by outperforming SFT in 7 out of 9 detection categories. Most notably, it showed significant improvements in complex tasks requiring deeper understanding:
+                <ul>
+                    <li>Position detection (+9.2 points)</li>
+                    <li>Relationship detection (+8.4 points)</li>
+                    <li>Negation handling (+3.3 points)</li>
+                </ul>
+            </li>
+            <li><strong>Visual Capabilities</strong>: While SFT showed strong performance in specific categories like Celebrity, Logo and Landmark detection, RL demonstrated more balanced improvements across different visual tasks, suggesting better overall generalization of visual understanding.</li>
+            <li><strong>Role of SFT vs RL</strong>: The results clearly demonstrate that while SFT can be effective for certain specific tasks, RL provides more comprehensive improvements. The 4.51 point improvement in average nms-ap (31.01 vs 26.50) indicates RL's superior ability to learn generalizable features rather than just memorizing training patterns.</li>
+        </ol>
+
+        <h2>Technical Insights</h2>
+        <div class="image-container">
+            <img src="images/all_completion_length.png" alt="Completion length chart">
+        </div>
+
+        <p>Through our experimental process, we made several key discoveries:</p>
+
+        <ol>
+            <li><strong>KL Divergence Impact</strong>: Setting KL beta to 0 led to longer completion lengths but introduced early bounding box redundancy issues. This required additional reward engineering to control.
+                <div class="image-container">
+                    <img src="images/AP50kl0-AP50.png" alt="AP50kl0-AP50 chart">
+                </div>
+            </li>
+            <li><strong>AP or AP50 For Bounding Box</strong>: For VLM models, accurately predicting bounding box coordinates can be challenging. Initially, AP50 was used as a more lenient reward function to train the model. During evaluation, a confidence score of 1.0 was assigned to all predicted boxes, and the COCO mAP was calculated to determine the reward. Training results indicated that the model quickly achieved high scores on AP50, but its performance on mAP during evaluation was suboptimal. Comparisons showed that using the stricter AP metric for training yielded better results.</li>
+            <li><strong>Bbox Length Control Rewards</strong>: The mAP metric provides minimal penalties for excessive false-positive boxes, allowing models to exploit this by generating redundant boxes to artificially boost AP scores. This behavior is particularly evident when KL divergence is zero, as the model tends to produce more redundant boxes by increasing output tokens. To counteract this, a reward mechanism was implemented to suppress such behavior. The introduction of an "odLength" reward, which combines AP with bounding box length control, proved to be highly effective.
+                <ul>
+                    <li>COCO_filtered mAP improved from 11.4 to 18.8</li>
+                    <li>OVDEval average mAP increased from 12.0 to 30.2</li>
+                </ul>
+            </li>
+            <li><strong>Output Characteristics</strong>: Models trained with KL=0 and length control produced more concise outputs while maintaining detection accuracy, suggesting better efficiency.
+                <div class="image-container">
+                    <img src="images/W&B Chart 2025_3_19 15_27_45.png" alt="W&B Chart">
+                </div>
+            </li>
+        </ol>
+
+        <h2>Comparison with State-of-the-Art OD: OmDet</h2>
+        <p>OmDet represents the current state-of-the-art in specialized open-vocabulary detection, introducing innovations like the Efficient Fusion Head (EFH) and language caching to achieve real-time performance while maintaining high accuracy. However, our VLM-R1 model demonstrates that large vision-language models can outperform specialized architectures in several key aspects.</p>
+
+        <p>Comparing the overall performance on OVDEval:</p>
+        <ul>
+            <li>OmDet: 25.86 nms-ap</li>
+            <li>VLM-R1 (RL): 31.01 nms-ap</li>
+            <li>Improvement: +5.15 points (19.9% relative improvement)</li>
+        </ul>
+
+        <p>This significant performance gap reveals interesting insights about the strengths and limitations of different approaches:</p>
+
+        <ol>
+            <li><strong>World Knowledge and Entity Recognition</strong>:
+                <ul>
+                    <li>In celebrity detection, VLM-R1 achieves 55.0 nms-ap compared to OmDet's 1.8</li>
+                    <li>This dramatic difference (>50 points) demonstrates the value of VLMs' pre-trained world knowledge</li>
+                    <li>Similar patterns appear in logo and landmark detection, where semantic understanding is crucial</li>
+                </ul>
+            </li>
+            <li><strong>Fine-grained Detection vs. High-level Understanding</strong>: The attribute category in OVDEval contains a lot of small objects.
+                <ul>
+                    <li>OmDet shows stronger performance in attribute detection (color: 41.98 vs 4.5)</li>
+                    <li>This suggests specialized architectures excel at fine-grained, local feature detection</li>
+                    <li>The gap is particularly noticeable for small objects where precise localization is critical</li>
+                </ul>
+            </li>
+            <li><strong>Complex Reasoning Tasks</strong>:
+                <ul>
+                    <li>VLM-R1 significantly outperforms in relationship detection (21.5 vs 11.4)</li>
+                    <li>Better handling of negation (37.7 vs 35.1)</li>
+                    <li>Demonstrates VLMs' superior capability in tasks requiring contextual understanding</li>
+                </ul>
+            </li>
+        </ol>
+
+        <p>These comparisons suggest a promising future direction: combining the complementary strengths of both approaches. Specialized OD architectures excel at fine-grained detection and high-recall scenarios, while VLMs bring rich world knowledge and superior reasoning capabilities. Future research could focus on creating hybrid architectures that leverage both the precise localization abilities of dedicated OD models and the semantic understanding of VLMs.</p>
+
+        <h2>Conclusion</h2>
+        <p>Our exploration demonstrates that reinforcement learning is particularly effective at improving object detection performance while maintaining generalization capabilities. The combination of the D³ dataset with our enhanced VLM-R1 framework provides a robust foundation for future developments in this field.</p>
+
+        <p>The results suggest that careful reward engineering, particularly around output length control, plays a crucial role in achieving optimal performance. This aligns with the broader understanding that RL approaches can learn more generalizable principles rather than simply memorizing training data.</p>
+
+        <p>Source: <a href="https://github.com/om-ai-lab/VLM-R1">VLM-R1 GitHub Repository</a></p>
+    </main>
+</body>
+</html> 
